@@ -28,12 +28,9 @@ public class PluginLoader(IServiceCollection services,
             }
 
             var assemblyPath = Path.Combine(_executingDir, assemblyName + ".dll");
-            Console.WriteLine($"Loading assemble {assemblyPath}.");
-
             if (File.Exists(assemblyPath))
             {
                 var assembly = Assembly.Load(assemblyName);
-                Console.WriteLine($"Loaded assemble {assemblyName}.");
 
                 var modules = assembly.GetTypes()
                     .Where(x => x.GetInterface(nameof(IBotSharpPlugin)) != null)
