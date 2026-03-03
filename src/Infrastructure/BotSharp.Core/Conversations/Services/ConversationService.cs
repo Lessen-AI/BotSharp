@@ -43,20 +43,26 @@ public partial class ConversationService : IConversationService
         return isDeleted;
     }
 
-    public async Task<Conversation> UpdateConversationTitle(string id, string title)
+    public async Task<bool> UpdateConversationTitle(string id, string title)
     {
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        await db.UpdateConversationTitle(id, title);
-        var conversation = await db.GetConversation(id);
-        return conversation;
+        if (!string.IsNullOrEmpty(title))
+        {
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            await db.UpdateConversationTitle(id, title);
+        }
+
+        return true;
     }
 
-    public async Task<Conversation> UpdateConversationTitleAlias(string id, string titleAlias)
+    public async Task<bool> UpdateConversationTitleAlias(string id, string titleAlias)
     {
-        var db = _services.GetRequiredService<IBotSharpRepository>();
-        await db.UpdateConversationTitleAlias(id, titleAlias);
-        var conversation = await db.GetConversation(id);
-        return conversation;
+        if (!string.IsNullOrEmpty(titleAlias))
+        {
+            var db = _services.GetRequiredService<IBotSharpRepository>();
+            await db.UpdateConversationTitleAlias(id, titleAlias);
+        }
+
+        return true;
     }
 
     public async Task<bool> UpdateConversationTags(string conversationId, List<string> toAddTags, List<string> toDeleteTags)
@@ -148,14 +154,14 @@ public partial class ConversationService : IConversationService
         throw new NotImplementedException();
     }
 
-    public async Task<List<RoleDialogModel>> GetDialogHistory(int lastCount = 100, bool fromBreakpoint = true, IEnumerable<string>? includeMessageTypes = null)
+    public async Task<List<RoleDialogModel>> GetDialogHistory(int lastCount = 100, bool fromBreakpoint = true, IEnumerable<string>? includeMessageTypes = null, ConversationDialogFilter? filter = null)
     {
         if (string.IsNullOrEmpty(_conversationId))
         {
             throw new ArgumentNullException("ConversationId is null.");
         }
 
-        var dialogs = await _storage.GetDialogs(_conversationId);
+        var dialogs = await _storage.GetDialogs(_conversationId, filter);
 
         if (!includeMessageTypes.IsNullOrEmpty())
         {
@@ -184,7 +190,7 @@ public partial class ConversationService : IConversationService
         var agentMsgCount = await GetAgentMessageCount();
         var count = agentMsgCount.HasValue && agentMsgCount.Value > 0 ? agentMsgCount.Value : lastCount;
 
-        return dialogs.TakeLast(count).ToList();
+        return filter?.Order == "desc" ? dialogs.Take(count).ToList() : dialogs.TakeLast(count).ToList();
     }
 
     public async Task SetConversationId(string conversationId, List<MessageState> states, bool isReadOnly = false)
