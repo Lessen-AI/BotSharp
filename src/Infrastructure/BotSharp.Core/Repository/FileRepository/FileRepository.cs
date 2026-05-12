@@ -59,7 +59,7 @@ public partial class FileRepository : IBotSharpRepository
     private const string CRON_FILE = "cron.json";
     private const string INSTRUCTION_LOG_FOLDER = "instruction-logs";
 
-    private const string AGENT_TEMPLATE_CONFIG_FILE = "template_configs.json";
+    private const string AGENT_TEMPLATE_CONFIG_FILE = "template-configs.json";
 
     public FileRepository(
         IServiceProvider services,

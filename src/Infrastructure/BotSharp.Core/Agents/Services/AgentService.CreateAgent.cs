@@ -124,7 +124,7 @@ public partial class AgentService
 
     private IEnumerable<AgentTemplateConfig> GetAgentTemplateConfigs(string baseDir)
     {
-        var configFile = Path.Combine(baseDir, "template_configs.json");
+        var configFile = Path.Combine(baseDir, "template-configs.json");
         var configs = new List<AgentTemplateConfig>();
 
         try

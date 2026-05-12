@@ -2,6 +2,16 @@ namespace BotSharp.Abstraction.Agents.Models;
 
 public class AgentLlmConfig
 {
+    public AgentLlmConfig() { }
+
+    public AgentLlmConfig(AgentTemplateLlmConfig templateLlmConfig) 
+    {
+        Provider = templateLlmConfig.Provider;
+        Model = templateLlmConfig.Model;
+        MaxOutputTokens = templateLlmConfig.MaxOutputTokens;
+        ReasoningEffortLevel = templateLlmConfig.ReasoningEffortLevel;
+    }
+
     /// <summary>
     /// Is inherited from default Agent Settings
     /// </summary>
