@@ -40,23 +40,4 @@ public partial class AgentController
             OutputArgs = x.OutputArgs
         }).OrderBy(x => x.TriggerName);
     }
-
-    [HttpGet("/rule/config/options")]
-    public async Task<IDictionary<string, RuleConfigModel>> GetRuleConfigOptions()
-    {
-        var dict = new Dictionary<string, RuleConfigModel>();
-        var flows = _services.GetServices<IRuleFlow<RuleGraph>>();
-
-        foreach (var flow in flows)
-        {
-            var config = await flow.GetTopologyConfigAsync();
-            if (string.IsNullOrEmpty(config.TopologyName))
-            {
-                continue;
-            }
-            dict[config.TopologyName] = config;
-        }
-
-        return dict;
-    }
 }

@@ -19,12 +19,7 @@ public class LlmConfigBase : LlmProviderModel
 
 public class LlmProviderModel
 {
-    [JsonPropertyName("provider")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Provider { get; set; }
-
-    [JsonPropertyName("model")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Model { get; set; }
 
     [JsonIgnore]
