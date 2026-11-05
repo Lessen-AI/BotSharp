@@ -68,6 +68,14 @@ public class ChatCompletionProvider : IChatCompletion
         }
 
         var completion = ParseCompletion(result.Body);
+        if (completion.ToolCallName == null
+            && TextToolCall.TryParse(completion.Text, out var textCallName, out var textCallArgs, out var textBefore))
+        {
+            LogTextToolCall(agent, textCallName);
+            completion.ToolCallName = textCallName;
+            completion.ToolCallArguments = textCallArgs;
+            completion.Text = textBefore;
+        }
 
         RoleDialogModel responseMessage;
         if (completion.ToolCallName != null)
@@ -187,6 +195,8 @@ public class ChatCompletionProvider : IChatCompletion
 
         var cancellation = _services.GetRequiredService<IConversationCancellationService>();
         var aggregate = new FloxiStreamAggregate();
+        // How much of the text has gone out: a tool call written into it is held back (TextToolCall)
+        var streamed = 0;
 
         try
         {
@@ -200,12 +210,20 @@ public class ChatCompletionProvider : IChatCompletion
                     continue;
                 }
 
+                var text = aggregate.Text.ToString();
+                var streamable = TextToolCall.StreamableLength(text);
+                if (streamable <= streamed)
+                {
+                    continue;
+                }
+
                 Push(hub, conv.ConversationId, ChatEvent.OnReceiveLlmStreamMessage,
-                    new RoleDialogModel(AgentRole.Assistant, delta)
+                    new RoleDialogModel(AgentRole.Assistant, text[streamed..streamable])
                     {
                         CurrentAgentId = agent.Id,
                         MessageId = messageId
                     });
+                streamed = streamable;
             }
         }
         catch (OperationCanceledException)
@@ -215,6 +233,18 @@ public class ChatCompletionProvider : IChatCompletion
         }
 
         var responseMessage = BuildStreamedMessage(agent, aggregate, messageId);
+
+        // An ending held back in case it began a call, which it didn't, is still part of the answer
+        var answer = aggregate.Text.ToString();
+        if (responseMessage.Role != AgentRole.Function && answer.Length > streamed)
+        {
+            Push(hub, conv.ConversationId, ChatEvent.OnReceiveLlmStreamMessage,
+                new RoleDialogModel(AgentRole.Assistant, answer[streamed..])
+                {
+                    CurrentAgentId = agent.Id,
+                    MessageId = messageId
+                });
+        }
 
         Push(hub, conv.ConversationId, ChatEvent.AfterReceiveLlmStreamMessage, responseMessage);
 
@@ -277,6 +307,15 @@ public class ChatCompletionProvider : IChatCompletion
 
     private RoleDialogModel BuildStreamedMessage(Agent agent, FloxiStreamAggregate aggregate, string messageId)
     {
+        if (aggregate.ToolCallName == null
+            && TextToolCall.TryParse(aggregate.Text.ToString(), out var textCallName, out var textCallArgs, out var textBefore))
+        {
+            LogTextToolCall(agent, textCallName);
+            aggregate.ToolCallName = textCallName;
+            aggregate.ToolCallArguments.Clear().Append(textCallArgs);
+            aggregate.Text.Clear().Append(textBefore);
+        }
+
         if (aggregate.ToolCallName != null)
         {
             return new RoleDialogModel(AgentRole.Function, aggregate.Text.ToString())
@@ -314,6 +353,13 @@ public class ChatCompletionProvider : IChatCompletion
             IsStreaming = true,
             RenderedInstruction = string.Join("\r\n", _renderedInstructions)
         };
+    }
+
+    // Logged because it means the backend didn't parse the model's tool call, which is the backend's to fix
+    private void LogTextToolCall(Agent agent, string functionName)
+    {
+        _logger.LogWarning("Model {Model} on {Provider} wrote its call to {Function} into the reply text for agent {Agent}; "
+            + "made it a tool call.", _model, Provider, functionName, agent.Name);
     }
 
     private static void Push(
