@@ -29,6 +29,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\..\docs\mcp\parallel-search.json" Link="parallel-search.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\mcp\sem.json" Link="sem.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Infrastructure\BotSharp.Core\BotSharp.Core.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\BotSharp.Core.Rules\BotSharp.Core.Rules.csproj" />
     <!-- For the rate-limit exemption tests: the harness has to be recognised by BotSharp own volume guards. -->
@@ -40,6 +45,8 @@
     <ProjectReference Include="..\..\src\Infrastructure\BotSharp.OpenAPI\BotSharp.OpenAPI.csproj" />
     <!-- For StreamingToolCallReconstructionTests: the streamed tool-call reconstruction lives here. -->
     <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.OpenAI\BotSharp.Plugin.OpenAI.csproj" />
+    <!-- For ReadPdfFnDefaultModelTests: the PDF reading fallback model lives here. -->
+    <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.FileHandler\BotSharp.Plugin.FileHandler.csproj" />
   </ItemGroup>
 
 </Project>

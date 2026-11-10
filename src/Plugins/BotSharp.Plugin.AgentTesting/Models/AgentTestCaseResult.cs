@@ -24,12 +24,21 @@ public class AgentTestCaseResult : MongoBase
 
     /// <summary>
     /// Which model produced this result. Null = the agent's own LlmConfig was used (the run named
-    /// no models). Unlike the deleted AgentTestRunTriggerRequest.Provider/Model, these values were
-    /// genuinely applied to this execution by AgentTestModelOverrideHook -- they are not a
-    /// decorative record of something that never took effect.
+    /// no models); <see cref="UsedModels"/> says what that resolved to. Unlike the deleted
+    /// AgentTestRunTriggerRequest.Provider/Model, these values were genuinely applied to this
+    /// execution by CompletionProvider.GetChatCompletion -- they are not a decorative record of something
+    /// that never took effect.
     /// </summary>
     public string? Provider { get; set; }
     public string? Model { get; set; }
+
+    /// <summary>
+    /// "provider/model" of every completion the agents under test actually ran on, in first-use
+    /// order. Filled whether or not the run named a model, so an "agent default" result still says
+    /// what it ran on. Can hold more than one entry: a router and the agent it hands off to may use
+    /// different models.
+    /// </summary>
+    public List<string> UsedModels { get; set; } = [];
 
     /// <summary>
     /// Wall clock for the whole case, including the canary, the mock lookups and the conversation
@@ -61,6 +70,13 @@ public class AgentTestCaseResult : MongoBase
     /// <see cref="AgentTestRun.ModelPricing"/>.
     /// </summary>
     public double Cost { get; set; }
+
+    /// <summary>
+    /// What this case's llmJudge assertions spent, kept out of <see cref="TotalTokens"/> and
+    /// <see cref="Cost"/> so those describe the model under test alone. Priced by the judge model.
+    /// </summary>
+    public long JudgeTokens { get; set; }
+    public double JudgeCost { get; set; }
 
     /// <summary>
     /// Infrastructure-level reason for failure (a timeout, a dead canary), kept distinct from an
@@ -97,6 +113,10 @@ public class TurnResult
     public int Index { get; set; }
     public string UserMessage { get; set; } = default!;
     public string? Output { get; set; }
+
+    /// <summary>The reply's rich message as JSON, null for a plain reply. What richContent assertions read.</summary>
+    public string? RichContent { get; set; }
+
     public List<AssertionResult> Assertions { get; set; } = [];
 
     /// <summary>

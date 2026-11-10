@@ -32,6 +32,11 @@ public class AgentTestCase : MongoBase
     /// </summary>
     public string? EntryAgentId { get; set; }
 
+    /// <summary>
+    /// The entry agent's template a Template case calls directly; ignored for every other type.
+    /// </summary>
+    public string? TemplateName { get; set; }
+
     /// <summary>A length of 1 is a single-turn case.</summary>
     public List<TestTurn> Turns { get; set; } = [];
 
@@ -139,7 +144,23 @@ public class TestTurn
 {
     public int Index { get; set; }
     public string UserMessage { get; set; } = default!;
+
+    /// <summary>Attached to the user message, e.g. photos for a vision template.</summary>
+    public List<TestFile> Files { get; set; } = [];
+
     public List<TestAssertion> Assertions { get; set; } = [];
+}
+
+[BsonIgnoreExtraElements(Inherited = true)]
+public class TestFile
+{
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Must stay reachable for as long as the case exists: a signed URL that expires turns every
+    /// later run into a model looking at nothing.
+    /// </summary>
+    public string FileUrl { get; set; } = string.Empty;
 }
 
 [BsonIgnoreExtraElements(Inherited = true)]
@@ -165,7 +186,10 @@ public class TestToolMock
     /// <summary>Optional: match only the Nth call (0-based).</summary>
     public int? CallIndex { get; set; }
 
-    /// <summary>The faked return, written to message.Content.</summary>
+    /// <summary>
+    /// The faked return, written to message.Content. <c>{{args.name}}</c> is filled with that argument of the call
+    /// (<see cref="Runtime.MockResultTemplate"/>).
+    /// </summary>
     public string ResultContent { get; set; } = string.Empty;
 
     /// <summary>Reproduces a real tool's "stop this turn's LLM completion" behaviour.</summary>
@@ -321,13 +345,17 @@ public static class CaseBatches
 /// Agent   -- one agent's own behaviour, normally entered directly so the router is not part of what
 ///            is being measured. Multi-agent journeys are Agent cases too; the agentChain assertion
 ///            is what describes their hand-offs.
+/// Template -- one of the entry agent's templates called directly, the way code such as a photo
+///            check calls it outside any conversation. Each turn is an independent call: no routing,
+///            no function calls, no dialog history.
 /// </summary>
 public static class CaseTypes
 {
     public const string Routing = "Routing";
     public const string Agent = "Agent";
+    public const string Template = "Template";
 
-    public static readonly string[] All = [Routing, Agent];
+    public static readonly string[] All = [Routing, Agent, Template];
 
     /// <summary>
     /// Maps any casing of a known type onto its canonical constant; null for anything unknown, so

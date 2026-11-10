@@ -26,6 +26,13 @@ public class AgentTestSuiteUpsertRequest
     public List<string> ExtraAllowedFunctions { get; set; } = [];
     public List<string> ForceBlockedFunctions { get; set; } = [];
     public int CaseTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// Cases to execute at the same time, 1 to <see cref="AgentTestConcurrency.Max"/>. Nullable for
+    /// the same reason <see cref="Enabled"/> is: a partial PUT that omits it must leave the suite's
+    /// value alone rather than resetting it to the default.
+    /// </summary>
+    public int? MaxParallelCases { get; set; }
 }
 
 /// <summary>
@@ -36,7 +43,9 @@ public class AgentTestCaseUpsertRequest
 {
     public string SuiteId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public bool Enabled { get; set; } = true;
+
+    /// <summary>Null keeps the current value on update; a new case defaults to enabled.</summary>
+    public bool? Enabled { get; set; }
 
     /// <summary>
     /// See <see cref="CaseTypes"/>. Blank or omitted means Agent, so an existing client that never
@@ -59,6 +68,9 @@ public class AgentTestCaseUpsertRequest
     /// otherwise turn every run of the case into an opaque infrastructure Error.
     /// </summary>
     public string? EntryAgentId { get; set; }
+
+    /// <summary>See <see cref="AgentTestCase.TemplateName"/>. Required for a Template case.</summary>
+    public string? TemplateName { get; set; }
 
     public List<TestTurn> Turns { get; set; } = [];
     public List<TestAssertion> Assertions { get; set; } = [];
@@ -206,11 +218,20 @@ public class AgentTestRunTriggerRequest
     ///
     /// This is not a revival of the two deleted Provider/Model fields above: those were stored and
     /// never read back, so they lied. This one genuinely takes effect --
-    /// AgentTestModelOverrideHook rewrites agent.LlmConfig to the named provider/model as the agent
-    /// loads, so the main conversation path (RoutingService.InvokeAgent) reads the rewritten value,
-    /// and every AgentTestCaseResult records which model produced it.
+    /// CompletionProvider.GetChatCompletion forces every chat completion in the case's conversation
+    /// onto the named provider/model, and every AgentTestCaseResult records which model produced it.
     /// </summary>
     public List<TestModel>? Models { get; set; }
+
+    /// <summary>
+    /// Cases to execute at the same time for this run only, 1 to
+    /// <see cref="AgentTestConcurrency.Max"/>; null falls back to the suite's own setting.
+    ///
+    /// Per run as well as per suite because the reason to change it is usually about the moment
+    /// rather than the suite: turning it down to 1 to read a flaky case's logs without three other
+    /// cases interleaved in them, or because the provider is already busy with something else.
+    /// </summary>
+    public int? MaxParallelCases { get; set; }
 }
 
 /// <summary>

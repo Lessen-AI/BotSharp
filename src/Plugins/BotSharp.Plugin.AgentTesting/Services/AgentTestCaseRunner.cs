@@ -11,6 +11,12 @@ public class AgentTestCaseRunner : ICaseRunner
     private readonly ITokenStatistics? _tokens;
     private readonly ILogger<AgentTestCaseRunner> _logger;
 
+    // What llmJudge calls added to _tokens. The judge resolves its completion provider from this
+    // scope, so TokenStatsConversationHook counts it alongside the model under test; it is taken
+    // back out of the case's figures so a model comparison is not skewed by the judge.
+    private long _judgeTokens;
+    private float _judgeCost;
+
     public AgentTestCaseRunner(
         IAgentTestRunRegistry registry,
         IAgentConversationDriver driver,
@@ -96,6 +102,8 @@ public class AgentTestCaseRunner : ICaseRunner
         // the delta is simply the final reading.
         var tokensBefore = _tokens?.Total ?? 0;
         var costBefore = _tokens?.AccumulatedCost ?? 0f;
+        var judgeTokensBefore = _judgeTokens;
+        var judgeCostBefore = _judgeCost;
         long modelDurationMs = 0;
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -213,8 +221,11 @@ public class AgentTestCaseRunner : ICaseRunner
                 // canary, the mock lookups and the conversation reads, and on a fast case that
                 // overhead is a big enough share to move a latency percentile.
                 var turnTimer = Stopwatch.StartNew();
-                var output = await AwaitOrHandOffAsync(
-                    _driver.SendAsync(conversationId, entryAgentId, turn.UserMessage, timeout.Token));
+                var files = turn.Files ?? [];
+                var reply = await AwaitOrHandOffAsync(
+                    string.Equals(testCase.CaseType, CaseTypes.Template, StringComparison.Ordinal)
+                        ? _driver.InstructAsync(entryAgentId, testCase.TemplateName!, turn.UserMessage, files, timeout.Token)
+                        : _driver.SendAsync(conversationId, entryAgentId, turn.UserMessage, files, timeout.Token));
                 turnTimer.Stop();
                 modelDurationMs += turnTimer.ElapsedMilliseconds;
 
@@ -226,7 +237,8 @@ public class AgentTestCaseRunner : ICaseRunner
                 {
                     Index = turn.Index,
                     UserMessage = turn.UserMessage,
-                    Output = output,
+                    Output = reply.Text,
+                    RichContent = reply.RichContent,
                     ModelDurationMs = turnTimer.ElapsedMilliseconds,
                     // Names, not hops: a result is read by a person, and the ids are only needed
                     // while an assertion is being evaluated.
@@ -239,7 +251,8 @@ public class AgentTestCaseRunner : ICaseRunner
                 // assertion about routing that never happened.
                 var turnContext = new AssertionContext
                 {
-                    Output = output,
+                    Output = reply.Text,
+                    RichContent = reply.RichContent,
                     ToolCalls = active.ObservedCalls.Where(c => c.TurnIndex == turn.Index).ToList(),
                     States = await _driver.ReadStatesAsync(conversationId),
                     AgentChain = turnChain
@@ -265,6 +278,7 @@ public class AgentTestCaseRunner : ICaseRunner
             var finalContext = new AssertionContext
             {
                 Output = result.Turns.LastOrDefault()?.Output,
+                RichContent = result.Turns.LastOrDefault()?.RichContent,
                 ToolCalls = active.ObservedCalls,
                 States = await _driver.ReadStatesAsync(conversationId),
                 AgentChain = caseChain
@@ -338,11 +352,14 @@ public class AgentTestCaseRunner : ICaseRunner
             stopwatch.Stop();
             result.DurationMs = stopwatch.ElapsedMilliseconds;
             result.ModelDurationMs = modelDurationMs;
+            result.UsedModels = active.UsedModels.ToList();
 
             // In the finally block so a timed-out or crashed case still reports what it spent. A run
             // that fell over having burned the budget is exactly the run whose cost matters.
-            result.TotalTokens = Math.Max(0, (_tokens?.Total ?? 0) - tokensBefore);
-            result.Cost = Math.Max(0, (_tokens?.AccumulatedCost ?? 0f) - costBefore);
+            result.JudgeTokens = _judgeTokens - judgeTokensBefore;
+            result.JudgeCost = _judgeCost - judgeCostBefore;
+            result.TotalTokens = Math.Max(0, (_tokens?.Total ?? 0) - tokensBefore - result.JudgeTokens);
+            result.Cost = Math.Max(0, (_tokens?.AccumulatedCost ?? 0f) - costBefore - result.JudgeCost);
 
             if (result.TotalTokens == 0 && result.Turns.Count > 0 && _tokens != null)
             {
@@ -410,7 +427,19 @@ public class AgentTestCaseRunner : ICaseRunner
                 "no IAgentTestJudge is registered, so llmJudge assertions cannot be scored");
         }
 
-        return await _judge.JudgeAsync(assertion, context, suite, ct);
+        // Turns and assertions run one after another, so nothing else reports into _tokens while
+        // the judge call is in flight and the difference is the judge's alone.
+        var tokensBefore = _tokens?.Total ?? 0;
+        var costBefore = _tokens?.AccumulatedCost ?? 0f;
+        try
+        {
+            return await _judge.JudgeAsync(assertion, context, suite, ct);
+        }
+        finally
+        {
+            _judgeTokens += (_tokens?.Total ?? 0) - tokensBefore;
+            _judgeCost += (_tokens?.AccumulatedCost ?? 0f) - costBefore;
+        }
     }
 
     /// <summary>

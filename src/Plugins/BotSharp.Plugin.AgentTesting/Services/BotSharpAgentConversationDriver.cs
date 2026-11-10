@@ -1,6 +1,11 @@
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using BotSharp.Abstraction.Agents;
 using BotSharp.Abstraction.Agents.Enums;
 using BotSharp.Abstraction.Conversations.Enums;
+using BotSharp.Abstraction.Files.Models;
+using BotSharp.Abstraction.Instructs;
+using BotSharp.Abstraction.Messaging;
 using BotSharp.Abstraction.Models;
 using BotSharp.Abstraction.Repositories;
 using BotSharp.Abstraction.Routing;
@@ -32,6 +37,7 @@ public class BotSharpAgentConversationDriver : IAgentConversationDriver
     private readonly IRoutingService _routing;
     private readonly IBotSharpRepository _repository;
     private readonly IAgentService _agents;
+    private readonly IInstructService _instructs;
     private readonly ILogger<BotSharpAgentConversationDriver> _logger;
 
     // Set at most once per instance: this driver is scoped per-case (a fresh DI scope per case,
@@ -46,12 +52,14 @@ public class BotSharpAgentConversationDriver : IAgentConversationDriver
         IRoutingService routing,
         IBotSharpRepository repository,
         IAgentService agents,
+        IInstructService instructs,
         ILogger<BotSharpAgentConversationDriver> logger)
     {
         _conversations = conversations;
         _routing = routing;
         _repository = repository;
         _agents = agents;
+        _instructs = instructs;
         _logger = logger;
     }
 
@@ -126,7 +134,8 @@ public class BotSharpAgentConversationDriver : IAgentConversationDriver
         return stored.Count(d => d.MetaData?.MessageId != null && written.Contains(d.MetaData.MessageId));
     }
 
-    public async Task<string?> SendAsync(string conversationId, string agentId, string userMessage, CancellationToken ct)
+    public async Task<AgentReply> SendAsync(
+        string conversationId, string agentId, string userMessage, IReadOnlyList<TestFile> files, CancellationToken ct)
     {
         // Fail fast only if the case had already timed out before we ever got here (e.g. a prior
         // turn ran long). Once the real call below starts, there is no cancellation hook left to
@@ -137,7 +146,10 @@ public class BotSharpAgentConversationDriver : IAgentConversationDriver
 
         await _conversations.SendMessage(
             agentId,
-            new RoleDialogModel(AgentRole.User, userMessage),
+            new RoleDialogModel(AgentRole.User, userMessage)
+            {
+                Files = files.Select(f => new BotSharpFile { FileName = f.FileName, FileUrl = f.FileUrl }).ToList()
+            },
             replyMessage: null,
             onResponseReceived: r =>
             {
@@ -152,7 +164,53 @@ public class BotSharpAgentConversationDriver : IAgentConversationDriver
         // label -- are what decide pass/fail.
         await EnsureConversationTaggedAsync(conversationId);
 
-        return last?.RichContent?.Message?.Text ?? last?.Content;
+        var message = last?.RichContent?.Message;
+        return new AgentReply(message?.Text ?? last?.Content, SerializeRichMessage(message));
+    }
+
+    public async Task<AgentReply> InstructAsync(
+        string agentId, string templateName, string userMessage, IReadOnlyList<TestFile> files, CancellationToken ct)
+    {
+        // Same fail-fast-only cancellation as SendAsync: Execute takes no token either.
+        ct.ThrowIfCancellationRequested();
+
+        // "#TEMPLATE#" makes the rendered template the system instruction and userMessage the user
+        // message. Without it InstructService sends the template as the user message and drops
+        // userMessage entirely, which is not how code that calls a template in production uses it.
+        var result = await _instructs.Execute(
+            agentId,
+            new RoleDialogModel(AgentRole.User, userMessage),
+            instruction: "#TEMPLATE#",
+            templateName: templateName,
+            files: files.Select(f => new InstructFileModel { FileName = f.FileName, FileUrl = f.FileUrl }).ToList());
+
+        return new AgentReply(result.Text, null);
+    }
+
+    // Unescaped so apostrophes and dashes stay literal: assertions match against this text and a
+    // judge reads it, and neither should have to see "it's".
+    private static readonly JsonSerializerOptions RichMessageJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    private string? SerializeRichMessage(IRichMessage? message)
+    {
+        if (message == null) return null;
+
+        try
+        {
+            // By runtime type: serializing as IRichMessage would drop every property the concrete
+            // message adds, which is exactly the content a richContent assertion is after.
+            return JsonSerializer.Serialize(message, message.GetType(), RichMessageJsonOptions);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or JsonException)
+        {
+            // Only richContent assertions read this; a message that cannot be serialized must not
+            // fail a case whose assertions never look at it.
+            _logger.LogWarning(ex, "Could not serialize rich message {Type} for agent-test output.", message.GetType().Name);
+            return null;
+        }
     }
 
     private async Task EnsureConversationTaggedAsync(string conversationId)

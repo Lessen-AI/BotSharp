@@ -84,14 +84,31 @@ public class TwilioInboundController : TwilioController
             await HookEmitter.Emit<ITwilioCallStatusHook>(_services,
                 async hook => await hook.OnVoicemailStarting(request), request.AgentId);
 
-            var url = twilio.GetSpeechPath(request.ConversationId, "voicemail.mp3");
-            response.Play(new Uri(url));
+            var voicemail = twilio.GetSavedSpeechFile(request.ConversationId, "voicemail");
+            twilio.AppendSpeech(response, request.ConversationId, voicemail);
         }
         else
         {
             if (agent.Labels.Contains("realtime"))
             {
                 response = twilio.ReturnBidirectionalMediaStreamsInstructions(instruction, agent);
+            }
+            // A call that arrives with an intent already has its first message queued for the Gather flow
+            else if (string.IsNullOrWhiteSpace(request.Intent) && _settings.ConversationRelay.IsEnabledFor(request.AgentId))
+            {
+                // ConversationRelay speaks text only: a greeting a session hook wrote (e.g. with the caller's name) is
+                // said as it is, otherwise the prompts the session hooks queued become the greeting
+                var greeting = !string.IsNullOrWhiteSpace(instruction.Text)
+                    ? instruction.Text
+                    : string.Join(" ", instruction.SpeechPaths
+                        .Select(twilio.GetPromptText)
+                        .Where(text => !string.IsNullOrWhiteSpace(text)));
+                if (greeting.Length == 0 && instruction.SpeechPaths.Count > 0)
+                {
+                    _logger.LogWarning($"No prompt text for the welcome speech of agent {request.AgentId}; " +
+                        "starting ConversationRelay without a greeting.");
+                }
+                response = twilio.ReturnConversationRelay(request.AgentId, request.ConversationId, greeting);
             }
             else
             {
@@ -204,6 +221,9 @@ public class TwilioInboundController : TwilioController
         {
             states.Add(new(StateConst.ROUTING_MODE, agent.Mode));
         }
+
+        // Kept for the whole call: the agent speaking after a routing may not carry the label, the stream stays
+        states.Add(new(TwilioService.RealtimeCallState, agent.Labels.Contains("realtime") ? "true" : "false", isGlobal: true));
 
         await convService.SetConversationId(conversation.Id, states);
 
