@@ -28,6 +28,7 @@
       <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.OpenAI\BotSharp.Plugin.OpenAI.csproj" />
       <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.LiteLLM\BotSharp.Plugin.LiteLLM.csproj" />
       <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.Daoxe\BotSharp.Plugin.Daoxe.csproj" />
+      <ProjectReference Include="..\..\src\Plugins\BotSharp.Plugin.FloxiAI\BotSharp.Plugin.FloxiAI.csproj" />
     </ItemGroup>
 
     <ItemGroup>
