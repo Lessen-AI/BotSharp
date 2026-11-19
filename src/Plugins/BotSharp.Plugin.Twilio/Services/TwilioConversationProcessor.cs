@@ -1,6 +1,7 @@
 using BotSharp.Abstraction.Infrastructures.Enums;
 using BotSharp.Abstraction.MessageHub.Models;
 using BotSharp.Abstraction.MessageHub.Services;
+using BotSharp.Abstraction.Options;
 using BotSharp.Abstraction.Routing;
 using BotSharp.Core.Infrastructures;
 using BotSharp.Plugin.Twilio.Interfaces;
@@ -113,6 +114,19 @@ public static class TwilioConversationProcessor
             if (callbacks.LastReplyCutOff)
             {
                 conv.States.SetState(ConversationRelayStates.LastReplyCutOff, "true", source: StateSource.Application);
+                if (callbacks.LastReplyLine != null && callbacks.LastReplyHeard != null)
+                {
+                    try
+                    {
+                        await MarkLastReplyCutOff(sp, message.ConversationId, callbacks.LastReplyLine, callbacks.LastReplyHeard);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The turn goes on without the mark: the flow still has LastReplyCutOff
+                        sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(TwilioConversationProcessor))
+                            .LogWarning(ex, $"Could not mark the reply the caller cut into in conversation {message.ConversationId}.");
+                    }
+                }
             }
             else
             {
@@ -140,6 +154,10 @@ public static class TwilioConversationProcessor
                 replyMessage: await BuildPostbackMessageModel(conv, message),
                 async msg =>
                 {
+                    // Said while the agent worked on the reply: the reply is appended once this returns, so they go in
+                    // ahead of it
+                    await KeepSaidLines(sp, message.AgentId, message.ConversationId, inputMsg.MessageId,
+                        ConversationRelayLabels.Filler, callbacks?.TakeFillers() ?? []);
                     // What the caller is told, which a rewrite below must not change
                     var spoken = msg.Content;
                     RewriteForHistory(msg, callbacks);
@@ -149,7 +167,10 @@ public static class TwilioConversationProcessor
                         HumanIntervationNeeded = string.Equals("human_intervention_needed", msg.FunctionName),
                         Content = spoken,
                         MessageId = msg.MessageId,
-                        KeepUninterrupted = callbacks?.KeepUninterrupted?.Invoke() ?? false
+                        KeepUninterrupted = callbacks?.KeepUninterrupted?.Invoke() ?? false,
+                        QuietWait = conv.States.GetState(ConversationRelayStates.QuietWait) == "true",
+                        GoodbyeOnSilence = conv.States.GetState(ConversationRelayStates.GoodbyeOnSilence) is { Length: > 0 } goodbye
+                            ? goodbye : null
                     };
                 }
             );
@@ -190,12 +211,87 @@ public static class TwilioConversationProcessor
         msg.Content = stored;
     }
 
+    /// <summary>
+    /// Marks the last reply in the history with the part of it the caller missed by cutting in, as a reply cut off while
+    /// it streamed is marked: the history took the line whole, as a line a tool gave is said only once its turn is over
+    /// </summary>
+    /// <remarks>
+    /// Why: the agent took "yes, that's" as an answer to "…is the number you're calling from, ending in 7, 8, 2, 4, the
+    /// best one to reach you?" when the caller had heard it only up to "ending in 7, 8, 2", and did not ask again "Is this
+    /// one of those?", cut off after "You already have three open requests for your AC." (dev call recording).
+    /// </remarks>
+    private static async Task MarkLastReplyCutOff(IServiceProvider sp, string conversationId, string line, string heard)
+    {
+        var storage = sp.GetRequiredService<IConversationStorage>();
+        var dialogs = await storage.GetDialogs(conversationId);
+        var last = dialogs.LastOrDefault(d => d.Role == AgentRole.Assistant && !d.ExcludeFromContext
+            && !string.IsNullOrWhiteSpace(d.Content));
+        var marked = last == null ? null : ConversationRelayCutIn.MarkStored(last.Content, line, heard);
+        if (marked == null)
+        {
+            return;
+        }
+
+        // The storage finds the dialog by its message id and role, then its place among those
+        var index = dialogs.Where(d => d.MessageId == last!.MessageId && d.Role == last.Role).ToList().IndexOf(last!);
+        var richContent = last!.RichContent;
+        if (richContent?.Message != null && richContent.Message.Text == last.Content)
+        {
+            richContent.Message.Text = marked;
+        }
+        var options = sp.GetRequiredService<BotSharpOptions>();
+        var element = new DialogElement
+        {
+            MetaData = new DialogMetaData { Role = last.Role, MessageId = last.MessageId },
+            Content = marked,
+            RichContent = richContent == null ? null : JsonSerializer.Serialize(richContent, options.JsonSerializerOptions)
+        };
+        await sp.GetRequiredService<IConversationService>().UpdateConversationMessage(conversationId,
+            new UpdateMessageRequest { Message = element, InnerIndex = index });
+    }
+
+    /// <summary>
+    /// Keeps lines the caller heard in the history, out of the agent's context: the fillers said while the agent worked
+    /// on a reply, kept just ahead of it (a reply to one, "Sure.", makes sense only next to it), and what a
+    /// ConversationRelay session says on its own (an apology, an idle prompt, a line said again)
+    /// </summary>
+    /// <param name="messageId">The caller message the lines go with; null gives each line a message of its own</param>
+    /// <param name="label">What the lines were (<see cref="ConversationRelayLabels"/>), kept as their MessageLabel</param>
+    public static async Task KeepSaidLines(IServiceProvider sp, string agentId, string conversationId, string? messageId,
+        string label, IReadOnlyCollection<(string Text, DateTime SaidUtc)> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return;
+        }
+
+        var dialogs = lines.Select(line => new RoleDialogModel(AgentRole.Assistant, line.Text)
+        {
+            CurrentAgentId = agentId,
+            MessageId = messageId ?? Guid.NewGuid().ToString(),
+            MessageLabel = label,
+            CreatedAt = line.SaidUtc,
+            ExcludeFromContext = true
+        }).ToList();
+        try
+        {
+            await sp.GetRequiredService<IConversationStorage>().Append(conversationId, dialogs);
+        }
+        catch (Exception ex)
+        {
+            // The call goes on, and a reply is still stored; only the record of these lines is lost
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(TwilioConversationProcessor))
+                .LogWarning(ex, $"Could not keep what was said in conversation {conversationId}.");
+        }
+    }
+
     private static async Task<PostbackMessageModel?> BuildPostbackMessageModel(
         IConversationService conv, CallerMessage message)
     {
-        var messages = await conv.GetDialogHistory(1);
-        if (!messages.Any()) return null;
-        var lastMessage = messages[0];
+        // A line kept only as a record of what the caller heard (KeepSaidLines) may have been said after the reply that
+        // asked for the postback
+        var lastMessage = (await conv.GetDialogHistory()).LastOrDefault(x => !x.ExcludeFromContext);
+        if (lastMessage == null) return null;
         if (string.IsNullOrEmpty(lastMessage.PostbackFunctionName)) return null;
         return new PostbackMessageModel
         {

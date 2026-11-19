@@ -51,6 +51,48 @@ public class AgentTurnCallbacks
     public bool LastReplyCutOff { get; set; }
 
     /// <summary>
+    /// With <see cref="LastReplyCutOff"/>, when the caller cut into the line: the line, and the part of it played before
+    /// they did ("" when none of it was). Null when it is not known, or the caller's words came before the line went out.
+    /// </summary>
+    /// <remarks>
+    /// The turn marks the line in the history with what the caller missed, as a reply cut off while it streamed is marked
+    /// (<see cref="RewriteReply"/>): a line a tool gave is said only once its turn is over, so the history took it whole.
+    /// </remarks>
+    public string? LastReplyLine { get; set; }
+    public string? LastReplyHeard { get; set; }
+
+    private readonly List<(string Text, DateTime SaidUtc)> _fillers = [];
+
+    /// <summary>
+    /// Notes a filler said while the agent works on the reply ("One moment, please."), to be kept in the history out of
+    /// the agent's context, so what the caller heard is all there
+    /// </summary>
+    public void NoteFillerSaid(string text)
+    {
+        lock (_fillers)
+        {
+            _fillers.Add((text, DateTime.UtcNow));
+        }
+    }
+
+    /// <summary>
+    /// The fillers said and not kept yet, oldest first; each is taken once
+    /// </summary>
+    /// <remarks>
+    /// The turn takes them as it stores its reply, to keep them just ahead of it. The flow takes what is left once the
+    /// turn is over: the fillers of a turn that failed, ran past its time or stored no reply, lost otherwise.
+    /// </remarks>
+    public List<(string Text, DateTime SaidUtc)> TakeFillers()
+    {
+        lock (_fillers)
+        {
+            var taken = _fillers.ToList();
+            _fillers.Clear();
+            return taken;
+        }
+    }
+
+    /// <summary>
     /// Called on the turn once it has read the conversation's states (<see cref="KeepUninterrupted"/> is set), before the
     /// agent hears the caller's words
     /// </summary>

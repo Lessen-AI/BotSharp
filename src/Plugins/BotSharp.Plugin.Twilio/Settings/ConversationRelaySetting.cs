@@ -99,6 +99,98 @@ public class ConversationRelaySetting
     /// </summary>
     public List<string> ResponseWatchdogLongPrompts { get; set; } = [];
 
+    /// <summary>
+    /// Seconds after the caller cut in, with nothing from them since, before the line they cut into is said again, once
+    /// (a cut-in no words follow is a noise or the line's own echo). A line said again and cut into again is not said a
+    /// third time: the caller is talking. 0 turns it off.
+    /// </summary>
+    /// <remarks>
+    /// On, the TwiML asks for partialPrompts, so a caller still talking is heard as activity before their words are final
+    /// and nothing is said over them. Twilio only sends those with Deepgram Flux: with another transcription, this has to
+    /// be longer than a caller's longest sentence after a cut-in.
+    /// </remarks>
+    public double ResumeAfterCutInSeconds { get; set; }
+
+    /// <summary>
+    /// Seconds of caller silence before each idle prompt, in turn; the last one is before hanging up. Empty uses
+    /// <see cref="IdleTimeoutSeconds"/> for every one.
+    /// </summary>
+    public List<double> IdleTimeouts { get; set; } = [];
+
+    /// <summary>
+    /// The first idle prompt asks the question the agent's last line asked again ("Sorry, I didn't catch that. ..."), the
+    /// next ones ask if the caller is still there, and the hang-up says goodbye (Twilio:PromptTexts say-it-again-question,
+    /// still-there and idle-goodbye). Off, every idle prompt is a "say it again" one and the hang-up is silent. Either
+    /// way, a caller who has said nothing yet is only asked if they are still there.
+    /// </summary>
+    public bool IdleAsksAgain { get; set; }
+
+    /// <summary>
+    /// Seconds of caller silence before each soft check-in ("I'm still here whenever you're ready.", prompt
+    /// quiet-wait-check-in) while a flow waits for the caller to do something on their phone
+    /// (<see cref="Models.ConversationRelayStates.QuietWait"/>); the last one is before hanging up
+    /// </summary>
+    public double QuietWaitSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// How many soft check-ins a caller who stays silent while the flow waits quietly hears before the call is hung up
+    /// </summary>
+    public int MaxQuietWaitPrompts { get; set; } = 4;
+
+    /// <summary>
+    /// Drop a caller's words that came in before they could hear the line just said (TooSoonToAnswer) when they only
+    /// acknowledge ("I agree.", "Okay.") and that line asks something: the tail of what they said before, which the
+    /// transcription split off. Words said after the caller heard a few words of the line are kept.
+    /// </summary>
+    public bool DropBackchannelTails { get; set; }
+
+    /// <summary>
+    /// Seconds past the moment everything said should have finished playing, with Twilio still saying the agent is speaking
+    /// and nothing cut into, before the session's playback is taken as stuck: the session drops its socket, Twilio connects
+    /// the call again, and the lines that never finished playing are said on the new session. Asks Twilio for its speaker
+    /// events (the events attribute with speaker-events); stops after <see cref="MaxReconnects"/>. 0 turns it off. A negative value
+    /// takes a playback still going that long before its expected end as stuck: only to try the reconnect on a test call.
+    /// </summary>
+    /// <remarks>
+    /// Why: on some calls Twilio said the agent started speaking and never that it stopped. Nothing said after that played,
+    /// and none of the caller's words came through, until they hung up; Twilio reported no error (dev calls 1c28cefa,
+    /// 46bc439c). How long a line takes is estimated from its length, on the slow side, so this is how much later than
+    /// even that the playback must still be going.
+    /// </remarks>
+    public double StuckPlaybackSeconds { get; set; }
+
+    /// <summary>
+    /// Settings for one agent's calls, by agent id, over the ones above
+    /// </summary>
+    public Dictionary<string, ConversationRelayAgentSetting> Agents { get; set; } = [];
+
+    /// <summary>
+    /// The settings for an agent's calls: these, with what <see cref="Agents"/> sets for it in their place
+    /// </summary>
+    public ConversationRelaySetting For(string? agentId)
+    {
+        if (agentId == null || !Agents.TryGetValue(agentId, out var agent))
+        {
+            return this;
+        }
+
+        var settings = (ConversationRelaySetting)MemberwiseClone();
+        settings.TranscriptionProvider = agent.TranscriptionProvider ?? TranscriptionProvider;
+        settings.SpeechModel = agent.SpeechModel ?? SpeechModel;
+        settings.InterruptSensitivity = agent.InterruptSensitivity ?? InterruptSensitivity;
+        settings.IgnoreBackchannel = agent.IgnoreBackchannel ?? IgnoreBackchannel;
+        settings.IdleTimeoutSeconds = agent.IdleTimeoutSeconds ?? IdleTimeoutSeconds;
+        settings.MaxIdlePrompts = agent.MaxIdlePrompts ?? MaxIdlePrompts;
+        settings.IdleTimeouts = agent.IdleTimeouts ?? IdleTimeouts;
+        settings.IdleAsksAgain = agent.IdleAsksAgain ?? IdleAsksAgain;
+        settings.QuietWaitSeconds = agent.QuietWaitSeconds ?? QuietWaitSeconds;
+        settings.MaxQuietWaitPrompts = agent.MaxQuietWaitPrompts ?? MaxQuietWaitPrompts;
+        settings.ResumeAfterCutInSeconds = agent.ResumeAfterCutInSeconds ?? ResumeAfterCutInSeconds;
+        settings.DropBackchannelTails = agent.DropBackchannelTails ?? DropBackchannelTails;
+        settings.StuckPlaybackSeconds = agent.StuckPlaybackSeconds ?? StuckPlaybackSeconds;
+        return settings;
+    }
+
     public bool IsEnabledFor(string? agentId)
     {
         return Enabled && (AgentIds.Count == 0 || (agentId != null && AgentIds.Contains(agentId)));
